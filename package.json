@@ -1,0 +1,17 @@
+{
+  "name": "ruh-e2e-automation",
+  "version": "1.0.0",
+  "description": "Daily scheduled Playwright E2E for Ruh AI Campaign — emails report to stakeholders",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^20.11.0",
+    "nodemailer": "^6.9.13"
+  }
+}
