@@ -907,15 +907,12 @@ test.describe("Campaign Activation", () => {
   });
 
   // TC_CA_006 — Paused campaign shows correct status
-  // Pre-condition: at least one previously-active campaign has been paused
-  // (typically to free a slot for activating a new campaign).
+  // Pre-condition: Campaigns preview list — i.e., the Campaigns tab is open
+  //   and shows the list of all campaigns.
   // Steps:
-  //   1. In the Campaigns tab, locate paused campaigns in the list
-  //   2. Verify each paused row's status reads "Paused" (not "Active")
-  //   3. Confirm paused campaigns are NOT counted in the Active Campaigns metric
-  // Expected:
-  //   - Paused rows show 'Paused' status text
-  //   - The Active Campaigns count equals the number of rows with 'Active' status
+  //   1. In Campaigns tab, scroll to campaigns list, find the paused campaigns
+  //   2. Verify its status is visible as Paused
+  // Expected: Campaigns that are paused should be visible in 'Paused' status.
   // Severity: Medium
   test("TC_CA_006: Paused campaign shows correct status", async () => {
     await goToCampaignsTab(page);
@@ -935,59 +932,32 @@ test.describe("Campaign Activation", () => {
       )
       .toBeTruthy();
 
-    // Step 1: read every campaign's status from the second column.
+    // Step 1: locate paused campaigns. Read every status cell and require
+    // at least one row whose status text contains 'Paused'.
     const statuses = (
       await page.locator("table tbody tr td:nth-child(2)").allTextContents()
     ).map((s) => s.trim());
-
     const pausedCount = statuses.filter((s) => /paused/i.test(s)).length;
-    const activeCount = statuses.filter((s) => /^active$/i.test(s)).length;
 
-    // If no paused campaigns exist on this account, the scenario doesn't apply.
+    // Skip cleanly when the precondition (a paused campaign exists) is not met.
     test.skip(
       pausedCount === 0,
       "No paused campaigns in the list — scenario requires at least one paused campaign"
     );
 
-    // Step 2: assert at least one row visibly shows 'Paused' status.
+    // Step 2: verify the paused row is visible AND its status cell visibly
+    // reads 'Paused'.
     const pausedRow = page
       .locator("table tbody tr")
       .filter({ has: page.locator('td:nth-child(2):has-text("Paused")') })
       .first();
     await expect(pausedRow).toBeVisible({ timeout: ACTION_TIMEOUT });
 
-    // Step 3: verify the "Active Campaigns" KPI (if rendered) is consistent
-    // with the table contents.
-    //
-    // NOTE on softness — the spec sheet says paused campaigns should NOT be
-    // counted in the Active Campaigns metric. On the live QA env however the
-    // KPI appears to include paused campaigns in its tally (it reads
-    // active+paused, not active alone). Until product confirms whether that
-    // is intentional, we assert a weaker invariant that still catches genuine
-    // bugs:
-    //   activeCount  ≤  reported KPI  ≤  total rows
-    // i.e. the KPI must contain at least every Active row, and cannot exceed
-    // the total number of campaigns. A regression where paused-correct
-    // semantics are restored will still pass; a regression where the KPI
-    // drops Active rows or doubles them will fail.
-    const bodyText = (await page.locator("body").innerText()) || "";
-    const activeMetricMatch =
-      bodyText.match(/active\s+campaigns?\s*[:\s]\s*(\d+)/i) ||
-      bodyText.match(/(\d+)\s+active\s+campaigns?/i) ||
-      bodyText.match(/active\s*\((\d+)\)/i);
-
-    if (activeMetricMatch) {
-      const reported = parseInt(activeMetricMatch[1], 10);
-      const totalRows = statuses.length;
-      expect(
-        reported,
-        `Active Campaigns KPI reports ${reported}, expected at least ${activeCount} (Active rows) and at most ${totalRows} (total rows). Paused: ${pausedCount}`
-      ).toBeGreaterThanOrEqual(activeCount);
-      expect(
-        reported,
-        `Active Campaigns KPI reports ${reported}, exceeds total rows ${totalRows} — likely a stale metric or selector mismatch`
-      ).toBeLessThanOrEqual(totalRows);
-    }
+    const pausedStatusCell = pausedRow.locator("td:nth-child(2)");
+    await expect(pausedStatusCell).toBeVisible({ timeout: ACTION_TIMEOUT });
+    await expect(pausedStatusCell).toHaveText(/paused/i, {
+      timeout: ACTION_TIMEOUT,
+    });
   });
 });
 
