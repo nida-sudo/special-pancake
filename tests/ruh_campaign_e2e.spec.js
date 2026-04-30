@@ -735,3 +735,100 @@ test.describe("Module 5: Integrations & Automation", () => {
     await askSarah(page, "How do I monitor system health?");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAMPAIGN CREATION — EMAIL SEQUENCE
+// New test scheme (TC_CC_<num>) for granular Campaign Creation scenarios.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe("Campaign Creation — Email Sequence", () => {
+  let page;
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await login(page);
+    await launchSarah(page);
+  });
+
+  test.afterAll(async () => {
+    await page.close().catch(() => {});
+  });
+
+  // TC_CC_011 — Validate email send times in sequence
+  // Pre-condition: an email sequence has been generated for the latest active campaign.
+  // Steps:
+  //   1. Review the email sequence schedule
+  //   2. Check that first email matches the campaign start date
+  //   3. Verify subsequent emails have appropriate spacing
+  // Expected:
+  //   - First email of latest active campaign: <Date> at <Time> IST
+  //   - Subsequent emails spaced over ~10 weeks
+  //   - All emails scheduled at the same time of day
+  // Severity: Medium
+  test("TC_CC_011: Validate email send times in sequence", async () => {
+    const opened = await openFirstCampaign(page);
+    test.skip(!opened, "No active campaigns to inspect");
+
+    const seqOpened = await clickDetailTab(page, "Sequence");
+    test.skip(!seqOpened, "Sequence tab not available on this campaign");
+
+    // Let the panel finish rendering scheduled email cards.
+    await page.waitForTimeout(1500);
+    const panelText = (await page.locator("body").innerText()) || "";
+
+    // Extract scheduled dates and IST times from the rendered panel. The UI
+    // renders email cards with date + time strings; we use loose regex
+    // matching so the test survives minor markup changes.
+    const dateRegex =
+      /\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\b/gi;
+    const timeRegex = /\b(\d{1,2}):(\d{2})\s*(AM|PM)?\s*IST\b/gi;
+
+    const dateMatches = [...panelText.matchAll(dateRegex)];
+    const timeMatches = [...panelText.matchAll(timeRegex)];
+
+    // Step 1 assertion — at least one email entry rendered.
+    expect(
+      dateMatches.length,
+      "Sequence panel should display at least one scheduled email date"
+    ).toBeGreaterThan(0);
+
+    // Step 2 assertion — every displayed time is in IST.
+    // (The regex anchors on "IST", so any timeMatches[i] is by definition IST.)
+    expect(
+      timeMatches.length,
+      "Sequence panel should display at least one IST time stamp"
+    ).toBeGreaterThan(0);
+
+    // Step 3a — all emails scheduled at the same time of day.
+    const normalize = (m) =>
+      `${parseInt(m[1], 10)}:${m[2]}${(m[3] || "").toUpperCase()}`.trim();
+    const firstTime = normalize(timeMatches[0]);
+    const allSameTime = timeMatches.every((m) => normalize(m) === firstTime);
+    expect(
+      allSameTime,
+      `All emails should share the same time-of-day; first was ${firstTime}, others differ`
+    ).toBeTruthy();
+
+    // Step 3b — total span ≤ 10 weeks (70 days), with a 1-week tolerance, and
+    // every consecutive gap is between 1 and 28 days (logical follow-up cadence).
+    if (dateMatches.length > 1) {
+      const dates = dateMatches
+        .map((m) => new Date(`${m[1]} ${m[2]} ${m[3]}`).getTime())
+        .filter(Number.isFinite);
+      dates.sort((a, b) => a - b);
+
+      const spanDays = (dates[dates.length - 1] - dates[0]) / (1000 * 60 * 60 * 24);
+      expect(
+        spanDays,
+        `Email schedule spans ${spanDays.toFixed(1)} days (expected ≤ 77 = 10 weeks + 1 week tolerance)`
+      ).toBeLessThanOrEqual(77);
+
+      for (let i = 1; i < dates.length; i++) {
+        const gapDays = (dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24);
+        expect(
+          gapDays > 0 && gapDays <= 28,
+          `Gap between email ${i} and ${i + 1} is ${gapDays.toFixed(1)} days (expected 0 < gap ≤ 28)`
+        ).toBeTruthy();
+      }
+    }
+  });
+});
