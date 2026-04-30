@@ -832,3 +832,89 @@ test.describe("Campaign Creation — Email Sequence", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAMPAIGN ACTIVATION
+// New test scheme (TC_CA_<num>) for campaign activation/lifecycle scenarios.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe("Campaign Activation", () => {
+  let page;
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await login(page);
+    await launchSarah(page);
+  });
+
+  test.afterAll(async () => {
+    await page.close().catch(() => {});
+  });
+
+  // TC_CA_006 — Paused campaign shows correct status
+  // Pre-condition: at least one previously-active campaign has been paused
+  // (typically to free a slot for activating a new campaign).
+  // Steps:
+  //   1. In the Campaigns tab, locate paused campaigns in the list
+  //   2. Verify each paused row's status reads "Paused" (not "Active")
+  //   3. Confirm paused campaigns are NOT counted in the Active Campaigns metric
+  // Expected:
+  //   - Paused rows show 'Paused' status text
+  //   - The Active Campaigns count equals the number of rows with 'Active' status
+  // Severity: Medium
+  test("TC_CA_006: Paused campaign shows correct status", async () => {
+    await goToCampaignsTab(page);
+    await page.waitForLoadState("networkidle").catch(() => {});
+
+    // Wait for the status column to hydrate (table briefly renders empty cells
+    // while data is fetched).
+    await expect
+      .poll(
+        async () => {
+          const cells = await page
+            .locator("table tbody tr td:nth-child(2)")
+            .allTextContents();
+          return cells.some((s) => s.trim().length > 0);
+        },
+        { timeout: ACTION_TIMEOUT }
+      )
+      .toBeTruthy();
+
+    // Step 1: read every campaign's status from the second column.
+    const statuses = (
+      await page.locator("table tbody tr td:nth-child(2)").allTextContents()
+    ).map((s) => s.trim());
+
+    const pausedCount = statuses.filter((s) => /paused/i.test(s)).length;
+    const activeCount = statuses.filter((s) => /^active$/i.test(s)).length;
+
+    // If no paused campaigns exist on this account, the scenario doesn't apply.
+    test.skip(
+      pausedCount === 0,
+      "No paused campaigns in the list — scenario requires at least one paused campaign"
+    );
+
+    // Step 2: assert at least one row visibly shows 'Paused' status.
+    const pausedRow = page
+      .locator("table tbody tr")
+      .filter({ has: page.locator('td:nth-child(2):has-text("Paused")') })
+      .first();
+    await expect(pausedRow).toBeVisible({ timeout: ACTION_TIMEOUT });
+
+    // Step 3: verify the Active Campaigns metric (rendered anywhere on the
+    // page as a KPI/counter) reflects only the rows whose status is exactly
+    // 'Active' — i.e., paused rows are excluded from the count.
+    const bodyText = (await page.locator("body").innerText()) || "";
+    const activeMetricMatch =
+      bodyText.match(/active\s+campaigns?\s*[:\s]\s*(\d+)/i) ||
+      bodyText.match(/(\d+)\s+active\s+campaigns?/i) ||
+      bodyText.match(/active\s*\((\d+)\)/i);
+
+    if (activeMetricMatch) {
+      const reported = parseInt(activeMetricMatch[1], 10);
+      expect(
+        reported,
+        `Active Campaigns metric reports ${reported} but table shows ${activeCount} 'Active' row(s) (paused: ${pausedCount})`
+      ).toBe(activeCount);
+    }
+  });
+});
