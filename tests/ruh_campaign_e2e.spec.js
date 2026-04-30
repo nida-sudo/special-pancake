@@ -1012,29 +1012,31 @@ test.describe("Overall Tab", () => {
     await expect(pauseBtn).toBeEnabled();
   });
 
-  // TC_OV_006 — Email sequence steps displayed on the Overview tracker
-  // Pre-condition: Overview tab is open and an email sequence was configured.
+  // TC_OV_006 — Email sequence steps displayed on Sequence tab
+  // Pre-condition: Overview tab of an active campaign is open; email sequence
+  //   was configured on the Sequence tab.
   // Steps:
-  //   1. Go to Campaigns tab → on Overview tab, locate the sequence progress tracker
+  //   1. Go to Campaigns tab → on Overview tab of an active campaign, click on Sequence tab
   //   2. Verify it shows all email steps: Initial Outreach, Follow-Up 1..7+
   //   3. Check that step indicators are present
-  // Expected: Sequence progress tracker shows all configured email steps with
-  //   check / status indicators.
+  // Expected: All emails scheduled at the same time with logical spacing
+  //   between follow-ups. Visible under the Sequence tab.
   // Severity: High
-  test("TC_OV_006: Email sequence steps displayed on Overview tracker", async () => {
+  test("TC_OV_006: Email sequence steps displayed on Sequence tab", async () => {
     const opened = await openFirstActiveCampaign(page);
     test.skip(!opened, "No active campaigns to inspect");
 
-    const overviewOpen = await clickDetailTab(page, "Overview");
-    test.skip(!overviewOpen, "Overview tab not available on this campaign");
+    // Navigate to the Sequence sub-tab (per updated spec; was Overview).
+    const seqOpen = await clickDetailTab(page, "Sequence");
+    test.skip(!seqOpen, "Sequence tab not available on this campaign");
 
     // Allow the panel content (cards, badges, indicators) to settle.
     await page.waitForTimeout(1500);
 
-    // Step 1 — assert the first step "Initial Outreach" is visible.
+    // Step 1 — assert the first step "Initial Outreach" is visible on Sequence tab.
     await expect(
       page.getByText(/initial\s+outreach/i).first(),
-      "Sequence tracker should show 'Initial Outreach' as the first step"
+      "Sequence tab should show 'Initial Outreach' as the first step"
     ).toBeVisible({ timeout: ACTION_TIMEOUT });
 
     // Step 2 — assert each Follow-Up 1 through Follow-Up 7 is visible.
@@ -1044,22 +1046,58 @@ test.describe("Overall Tab", () => {
       const re = new RegExp(`follow[\\s-]*up\\s*${n}\\b`, "i");
       await expect(
         page.getByText(re).first(),
-        `Sequence tracker should show Follow-Up ${n}`
+        `Sequence tab should show Follow-Up ${n}`
       ).toBeVisible({ timeout: ACTION_TIMEOUT });
     }
 
-    // Step 3 — assert step indicators exist next to the step labels.
-    // Heuristic: the panel should contain at least 8 step containers (Initial
-    // + 7 Follow-Ups). We verify by counting elements that match either step
-    // label across the whole panel — this catches the indicator dots/checks
-    // that wrap each label in their own container.
+    // Step 3 — assert at least 8 step indicators (Initial + 7 Follow-Ups) so
+    // each step has its own container. This catches the check/status icons
+    // that wrap each step label.
     const stepLocators = page.locator(
       'text=/initial\\s+outreach|follow[\\s-]*up\\s*\\d+/i'
     );
     const stepCount = await stepLocators.count();
     expect(
       stepCount,
-      `Expected ≥ 8 sequence-step indicators on the Overview tracker, found ${stepCount}`
+      `Expected ≥ 8 sequence-step indicators on Sequence tab, found ${stepCount}`
     ).toBeGreaterThanOrEqual(8);
+
+    // Expected (updated) — all emails scheduled at the same time of day,
+    // with logical spacing between follow-ups. Read the panel text and parse
+    // dates / IST times.
+    const panelText = (await page.locator("body").innerText()) || "";
+
+    const timeMatches = [
+      ...panelText.matchAll(/\b(\d{1,2}):(\d{2})\s*(AM|PM)?\s*IST\b/gi),
+    ];
+    if (timeMatches.length > 1) {
+      const normalize = (m) =>
+        `${parseInt(m[1], 10)}:${m[2]}${(m[3] || "").toUpperCase()}`.trim();
+      const firstTime = normalize(timeMatches[0]);
+      const allSameTime = timeMatches.every((m) => normalize(m) === firstTime);
+      expect(
+        allSameTime,
+        `Sequence-tab emails should share the same time-of-day; first was ${firstTime}, others differ`
+      ).toBeTruthy();
+    }
+
+    const dateMatches = [
+      ...panelText.matchAll(
+        /\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\b/gi
+      ),
+    ];
+    if (dateMatches.length > 1) {
+      const dates = dateMatches
+        .map((m) => new Date(`${m[1]} ${m[2]} ${m[3]}`).getTime())
+        .filter(Number.isFinite);
+      dates.sort((a, b) => a - b);
+      for (let i = 1; i < dates.length; i++) {
+        const gapDays = (dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24);
+        expect(
+          gapDays > 0 && gapDays <= 28,
+          `Sequence-tab gap between email ${i} and ${i + 1} is ${gapDays.toFixed(1)} days (expected 0 < gap ≤ 28 = logical follow-up cadence)`
+        ).toBeTruthy();
+      }
+    }
   });
 });
