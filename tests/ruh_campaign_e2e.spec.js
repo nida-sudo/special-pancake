@@ -833,6 +833,57 @@ test.describe("Campaign Creation — Email Sequence", () => {
   });
 });
 
+// Helper used by Campaign Activation + Overall Tab specs: opens the first row
+// in the Campaigns table whose status is exactly 'Active'. Returns the
+// campaign name on success or null if no active campaign exists. The helper
+// closes any pre-open detail panel first so re-entering doesn't toggle the
+// panel shut.
+async function openFirstActiveCampaign(page) {
+  await goToCampaignsTab(page);
+  await page.waitForLoadState("networkidle").catch(() => {});
+
+  // Wait for the status column to hydrate.
+  await expect
+    .poll(
+      async () => {
+        const cells = await page
+          .locator("table tbody tr td:nth-child(2)")
+          .allTextContents();
+        return cells.some((s) => s.trim().length > 0);
+      },
+      { timeout: ACTION_TIMEOUT }
+    )
+    .toBeTruthy();
+
+  // Close any open detail panel from a prior test.
+  const overviewTab = page.getByRole("tab", { name: /^Overview$/i }).first();
+  if (await overviewTab.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(500);
+  }
+
+  // Find the first row whose status column says 'Active'.
+  const activeRow = page
+    .locator("table tbody tr")
+    .filter({ has: page.locator('td:nth-child(2):has-text("Active")') })
+    .first();
+
+  if (!(await activeRow.isVisible({ timeout: 3000 }).catch(() => false))) {
+    return null;
+  }
+
+  const nameButton = activeRow.locator("td button").first();
+  const name = (await nameButton.textContent())?.trim() || null;
+  await nameButton.click();
+
+  // Retry once if the panel didn't open (click can race re-render).
+  if (!(await overviewTab.isVisible({ timeout: 3000 }).catch(() => false))) {
+    await nameButton.click().catch(() => {});
+  }
+  await expect(overviewTab).toBeVisible({ timeout: ACTION_TIMEOUT });
+  return name;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CAMPAIGN ACTIVATION
 // New test scheme (TC_CA_<num>) for campaign activation/lifecycle scenarios.
@@ -916,5 +967,99 @@ test.describe("Campaign Activation", () => {
         `Active Campaigns metric reports ${reported} but table shows ${activeCount} 'Active' row(s) (paused: ${pausedCount})`
       ).toBe(activeCount);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OVERALL TAB — ACTIONS & SEQUENCE TRACKER
+// New test scheme (TC_OV_<num>) for Overview-tab content of active campaigns.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe("Overall Tab", () => {
+  let page;
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await login(page);
+    await launchSarah(page);
+  });
+
+  test.afterAll(async () => {
+    await page.close().catch(() => {});
+  });
+
+  // TC_OV_005 — Pause button present for active campaign
+  // Pre-condition: campaign status is Active; Overview tab is open.
+  // Steps:
+  //   1. Go to Campaigns tab → click on an active campaign
+  //   2. On Overview tab, locate the action buttons
+  //   3. Verify 'Pause' button is present
+  // Expected: Pause button is visible and enabled.
+  // Severity: Medium
+  test("TC_OV_005: Pause button present for active campaign", async () => {
+    const opened = await openFirstActiveCampaign(page);
+    test.skip(!opened, "No active campaigns to inspect");
+
+    const overviewOpen = await clickDetailTab(page, "Overview");
+    test.skip(!overviewOpen, "Overview tab not available on this campaign");
+
+    // The detail panel renders an action area with a Pause button when the
+    // campaign is Active. Match a button literally named "Pause" (allow an
+    // optional " Campaign" suffix to be tolerant of label variants).
+    const pauseBtn = page
+      .getByRole("button", { name: /^Pause(\s+Campaign)?$/i })
+      .first();
+    await expect(pauseBtn).toBeVisible({ timeout: ACTION_TIMEOUT });
+    await expect(pauseBtn).toBeEnabled();
+  });
+
+  // TC_OV_006 — Email sequence steps displayed on the Overview tracker
+  // Pre-condition: Overview tab is open and an email sequence was configured.
+  // Steps:
+  //   1. Go to Campaigns tab → on Overview tab, locate the sequence progress tracker
+  //   2. Verify it shows all email steps: Initial Outreach, Follow-Up 1..7+
+  //   3. Check that step indicators are present
+  // Expected: Sequence progress tracker shows all configured email steps with
+  //   check / status indicators.
+  // Severity: High
+  test("TC_OV_006: Email sequence steps displayed on Overview tracker", async () => {
+    const opened = await openFirstActiveCampaign(page);
+    test.skip(!opened, "No active campaigns to inspect");
+
+    const overviewOpen = await clickDetailTab(page, "Overview");
+    test.skip(!overviewOpen, "Overview tab not available on this campaign");
+
+    // Allow the panel content (cards, badges, indicators) to settle.
+    await page.waitForTimeout(1500);
+
+    // Step 1 — assert the first step "Initial Outreach" is visible.
+    await expect(
+      page.getByText(/initial\s+outreach/i).first(),
+      "Sequence tracker should show 'Initial Outreach' as the first step"
+    ).toBeVisible({ timeout: ACTION_TIMEOUT });
+
+    // Step 2 — assert each Follow-Up 1 through Follow-Up 7 is visible.
+    // The spec says "Follow-Up 7+" so we accept anything ≥ 7; we require
+    // 1..7 to be present.
+    for (let n = 1; n <= 7; n++) {
+      const re = new RegExp(`follow[\\s-]*up\\s*${n}\\b`, "i");
+      await expect(
+        page.getByText(re).first(),
+        `Sequence tracker should show Follow-Up ${n}`
+      ).toBeVisible({ timeout: ACTION_TIMEOUT });
+    }
+
+    // Step 3 — assert step indicators exist next to the step labels.
+    // Heuristic: the panel should contain at least 8 step containers (Initial
+    // + 7 Follow-Ups). We verify by counting elements that match either step
+    // label across the whole panel — this catches the indicator dots/checks
+    // that wrap each label in their own container.
+    const stepLocators = page.locator(
+      'text=/initial\\s+outreach|follow[\\s-]*up\\s*\\d+/i'
+    );
+    const stepCount = await stepLocators.count();
+    expect(
+      stepCount,
+      `Expected ≥ 8 sequence-step indicators on the Overview tracker, found ${stepCount}`
+    ).toBeGreaterThanOrEqual(8);
   });
 });
