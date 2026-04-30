@@ -148,21 +148,46 @@ async function goToCampaignsTab(page) {
   const tab = page.getByRole("button", { name: /^Campaigns$/i }).first();
   await tab.waitFor({ state: "visible", timeout: ACTION_TIMEOUT });
   await tab.click();
+  await page.waitForLoadState("networkidle").catch(() => {});
 
-  // Some QA test accounts land on a "Your SDR Assistant is Getting
-  // Configured..." onboarding overlay that hides the campaigns table. If the
-  // "Skip configurations for now" button is present, dismiss it.
-  const skipBtn = page
-    .getByRole("button", { name: /Skip configurations/i })
-    .first();
-  if (await skipBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await skipBtn.click().catch(() => {});
-    await page.waitForTimeout(1000);
+  // QA accounts (especially on first CI login) sometimes land on a
+  // "Your SDR Assistant is Getting Configured..." onboarding overlay that
+  // hides the Campaigns table. Try several dismissal-button labels with a
+  // generous timeout. The overlay may render up to 5s after the navigation.
+  const dismissalPatterns = [
+    /Skip configurations? for now/i,
+    /Skip configurations?/i,
+    /Skip for now/i,
+    /Continue to (Chat|Campaigns)/i,
+  ];
+  for (const pattern of dismissalPatterns) {
+    const btn = page.getByRole("button", { name: pattern }).first();
+    if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      // Only click if enabled — "Continue to Chat" can be disabled until
+      // configurations are filled in.
+      const enabled = await btn.isEnabled().catch(() => false);
+      if (enabled) {
+        await btn.click().catch(() => {});
+        await page.waitForLoadState("networkidle").catch(() => {});
+        await page.waitForTimeout(1000);
+        break;
+      }
+    }
   }
 
-  await expect(
-    page.getByRole("heading", { name: /Campaigns & Tasks/i })
-  ).toBeVisible({ timeout: ACTION_TIMEOUT });
+  // Final wait for the Campaigns heading. Use poll so transient renders
+  // (overlay flicker, table shell-then-hydrate) don't trip the assertion.
+  await expect
+    .poll(
+      async () =>
+        await page
+          .getByRole("heading", { name: /Campaigns & Tasks/i })
+          .first()
+          .isVisible()
+          .catch(() => false),
+      { timeout: NAV_TIMEOUT, message: "Campaigns & Tasks heading never appeared" }
+    )
+    .toBe(true);
 }
 
 async function goToChatTab(page) {
