@@ -2,7 +2,7 @@ name: Ruh E2E Daily
 
 on:
   schedule:
-    # 9:00 AM IST = 03:30 UTC. Edit the cron line below if the team timezone changes.
+    #
     - cron: "30 3 * * *"
   workflow_dispatch: {}
 
